@@ -1,173 +1,209 @@
-# example of loading the cifar10 dataset
-import sys
-from matplotlib import pyplot
-from keras.datasets import cifar10
-from keras.utils import to_categorical
-from keras.models import Sequential
-from keras.layers import (
-    Conv2D,
-    MaxPooling2D,
-    Flatten,
-    Dense,
-    Dropout,
-    BatchNormalization,
-)
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torchvision
+import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
+import numpy as np
+from torch.utils.data import DataLoader
 
+# Define the CNN architecture
+class NeuralNet(nn.Module):
+    def __init__(self):
+        super(NeuralNet, self).__init__()
+        
+        self.block1 = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2)
+        )
+        
+        # Second block
+        self.block2 = nn.Sequential(
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2)
+        )
+        
+        # Third block
+        self.block3 = nn.Sequential(
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2)
+        )
+        
+        # Classifier
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Flatten(),
+            nn.Linear(128 * 4 * 4, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 10)
+        )
+
+    def forward(self, x):
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.classifier(x)
+        return x
 
 def load_dataset():
-    # load dataset
-    train, test = cifar10.load_data()
-    trainX, trainY = train
-    testX, testY = test
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ])
+    
+    trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
+                                          download=True, transform=transform)
+    testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+                                         download=True, transform=transform)
+    
+    trainloader = DataLoader(trainset, batch_size=64, shuffle=True, num_workers=2)
+    testloader = DataLoader(testset, batch_size=64, shuffle=False, num_workers=2)
+    
+    return trainloader, testloader
 
-    trainY = to_categorical(trainY)
-    testY = to_categorical(testY)
-    return trainX, trainY, testX, testY
-
-
-classes = (
-    "plane",
-    "car",
-    "bird",
-    "cat",
-    "deer",
-    "dog",
-    "frog",
-    "horse",
-    "ship",
-    "truck",
-)
-
-
-# plot first few images
-def plot_images(images, labels):
-    f, ax = pyplot.subplots(4, 4)
+def plot_images(dataloader):
+    classes = ('plane', 'car', 'bird', 'cat', 'deer',
+              'dog', 'frog', 'horse', 'ship', 'truck')
+    
+    images, labels = next(iter(dataloader))
+    images = images.numpy()
+    
+    fig, axes = plt.subplots(4, 4, figsize=(10, 10))
     for i in range(16):
-        ax[i // 4, i % 4].imshow(images[i])
-        ax[i // 4, i % 4].set_title(labels[i])
-        ax[i // 4, i % 4].axis("off")
-    pyplot.show()
+        ax = axes[i//4, i%4]
+        # Convert from CHW to HWC format and denormalize
+        img = np.transpose(images[i], (1, 2, 0)) * 0.5 + 0.5
+        ax.imshow(img)
+        ax.set_title(classes[labels[i]])
+        ax.axis('off')
+    plt.tight_layout()
+    plt.show()
 
+def train_model(model, trainloader, testloader, epochs=100, device='cuda'):
+    loss_fun = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters())
+    
+    model = model.to(device)
+    train_losses = []
+    test_losses = []
+    train_accs = []
+    test_accs = []
+    
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        for i, (inputs, labels) in enumerate(trainloader):
+            inputs, labels = inputs.to(device), labels.to(device)
+            
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = loss_fun(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
+        
+        train_loss = running_loss / len(trainloader)
+        train_acc = 100. * correct / total
+        
+        # Validation phase
+        model.eval()
+        test_loss = 0
+        correct = 0
+        total = 0
+        
+        with torch.no_grad():
+            for inputs, labels in testloader:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                loss = loss_fun(outputs, labels)
+                
+                test_loss += loss.item()
+                _, predicted = outputs.max(1)
+                total += labels.size(0)
+                correct += predicted.eq(labels).sum().item()
+        
+        test_loss = test_loss / len(testloader)
+        test_acc = 100. * correct / total
+        
+        train_losses.append(train_loss)
+        test_losses.append(test_loss)
+        train_accs.append(train_acc)
+        test_accs.append(test_acc)
+        
+        if epoch % 10 == 0:
+            print(f'Epoch {epoch}: Train Acc: {train_acc:.2f}%, Test Acc: {test_acc:.2f}%')
+    
+    return train_losses, test_losses, train_accs, test_accs
 
-def prep_pixels(train, test):
-    train_norm = train.astype("float32")
-    test_norm = test.astype("float32")
-    train_norm = train_norm / 255.0
-    test_norm = test_norm / 255.0
-    # return normalized images
-    return train_norm, test_norm
-
-
-def build_model():
-
-    size = 32
-    depth = 3
-
-    model = Sequential()
-    model.add(
-        Conv2D(
-            32,
-            (3, 3),
-            activation="relu",
-            kernel_initializer="he_uniform",
-            padding="same",
-            input_shape=(size, size, depth),
-        )
-    )
-    model.add(
-        Conv2D(
-            32,
-            (3, 3),
-            activation="relu",
-            kernel_initializer="he_uniform",
-            padding="same",
-        )
-    )
-    model.add(MaxPooling2D((2, 2)))
-    model.add(
-        Conv2D(
-            64,
-            (3, 3),
-            activation="relu",
-            kernel_initializer="he_uniform",
-            padding="same",
-        )
-    )
-    model.add(
-        Conv2D(
-            64,
-            (3, 3),
-            activation="relu",
-            kernel_initializer="he_uniform",
-            padding="same",
-        )
-    )
-    model.add(MaxPooling2D((2, 2)))
-    model.add(
-        Conv2D(
-            128,
-            (3, 3),
-            activation="relu",
-            kernel_initializer="he_uniform",
-            padding="same",
-        )
-    )
-    model.add(
-        Conv2D(
-            128,
-            (3, 3),
-            activation="relu",
-            kernel_initializer="he_uniform",
-            padding="same",
-        )
-    )
-    model.add(MaxPooling2D((2, 2)))
-    model.add(Dropout(0.2))
-    model.add(Flatten())
-    model.add(Dense(128, activation="relu", kernel_initializer="he_uniform"))
-    model.add(Dropout(0.2))
-    model.add(Dense(10, activation="softmax"))
-    return model
-
-
-# plot diagnostic learning curves
-def summarize_diagnostics(history):
-    pyplot.subplot(211)
-    pyplot.title("Cross Entropy Loss")
-    pyplot.plot(history.history["loss"], color="blue", label="train")
-    pyplot.plot(history.history["val_loss"], color="orange", label="test")
-    pyplot.subplot(212)
-    pyplot.title("Classification Accuracy")
-    pyplot.plot(history.history["accuracy"], color="blue", label="train")
-    pyplot.plot(history.history["val_accuracy"], color="orange", label="test")
-    filename = sys.argv[0].split("/")[-1]
-    pyplot.savefig(filename + "_plot.png")
-    pyplot.close()
-
+def plot_training_curves(train_losses, test_losses, train_accs, test_accs):
+    plt.figure(figsize=(12, 4))
+    
+    plt.subplot(121)
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(test_losses, label='Test Loss')
+    plt.title('Cross Entropy Loss')
+    plt.legend()
+    
+    plt.subplot(122)
+    plt.plot(train_accs, label='Train Accuracy')
+    plt.plot(test_accs, label='Test Accuracy')
+    plt.title('Classification Accuracy')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig('training_curves.png')
+    plt.show()
 
 def run_test_harness():
-    trainX, trainY, testX, testY = load_dataset()
-    # prepare pixel data
-    trainX, testX = prep_pixels(trainX, testX)
-    # define model
-    model = build_model()
-
-    model.compile(
-        optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"]
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f'Using device: {device}')
+    
+    # Load data
+    trainloader, testloader = load_dataset()
+    
+    # Show some training images
+    plot_images(trainloader)
+    
+    # Create and train model
+    model = NeuralNet()
+    train_losses, test_losses, train_accs, test_accs = train_model(
+        model, trainloader, testloader, epochs=100, device=device
     )
-    history = model.fit(
-        trainX,
-        trainY,
-        epochs=100,
-        batch_size=64,
-        validation_data=(testX, testY),
-        verbose=0,
-    )
-    _, acc = model.evaluate(testX, testY, verbose=0)
+    
+    # Plot training curves
+    plot_training_curves(train_losses, test_losses, train_accs, test_accs)
+    
+    # Final test accuracy
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for inputs, labels in testloader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
+    
+    final_acc = 100. * correct / total
+    print(f'Final Test Accuracy: {final_acc:.2f}%')
 
-    print("> %.3f" % (acc * 100.0))
-    # learning curves
-    summarize_diagnostics(history)
-
-
-run_test_harness()
+if __name__ == '__main__':
+    run_test_harness()
