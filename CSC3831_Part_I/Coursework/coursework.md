@@ -1,9 +1,13 @@
+# title
+
+    
+
 ### 2. Training without Batch Normalization
 
 * Ran for 19 epochs before early stopping
 * Initial loss: 1.6406 → Final loss: 0.2938
 * Best test loss: 0.6745 (Epoch 10)
-* Signs of overfitting after epoch 10 (train loss keeps decreasing while test loss increases)
+* Signs of overfitting after e		poch 10 (train loss keeps decreasing while test loss increases)
 
 ### 3. Training with Batch Normalization
 
